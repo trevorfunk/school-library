@@ -23,6 +23,8 @@ export default function Library({ onSignOut }) {
   const [activeLoans, setActiveLoans] = useState([]);
   const [loansLoading, setLoansLoading] = useState(false);
   const [loansErr, setLoansErr] = useState("");
+  const [loansOpen, setLoansOpen] = useState(false);
+  const [cardActingBookId, setCardActingBookId] = useState("");
 
   // Category dropdown filter
   const CAT_ALL = "__ALL__";
@@ -160,6 +162,7 @@ export default function Library({ onSignOut }) {
         return {
           ...l,
           copy_code: copy?.copy_code || "",
+          book_id: copy?.book_id || null,
           book_title: book?.title || "(Unknown book)",
           book_author: book?.author || "",
           book_cover_url: book?.cover_url || null,
@@ -281,6 +284,48 @@ export default function Library({ onSignOut }) {
         (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" })
       );
   }, [books, q, categoryFilter, CAT_ALL, CAT_UNC]);
+
+  // ---- active loans by book (admin only) ----
+  const loansByBookId = useMemo(() => {
+    if (!isAdmin) return new Map();
+    const m = new Map();
+    for (const l of activeLoans) {
+      const bid = l.book_id;
+      if (!bid) continue;
+      if (!m.has(bid)) m.set(bid, []);
+      m.get(bid).push(l);
+    }
+    return m;
+  }, [activeLoans, isAdmin]);
+
+  async function checkInBookFromCard(bookId) {
+    if (!isAdmin) return;
+    const loans = loansByBookId.get(bookId) || [];
+    const copyIds = [...new Set(loans.map((l) => l.copy_id).filter(Boolean))];
+    if (!copyIds.length) return;
+
+    if (copyIds.length > 1) {
+      const ok = confirm(
+        `This book has ${copyIds.length} copies checked out. Check in all of them?`
+      );
+      if (!ok) return;
+    }
+
+    setCardActingBookId(bookId);
+    setErr("");
+
+    for (const copyId of copyIds) {
+      const { error } = await supabase.rpc("checkin_copy", { p_copy_id: copyId });
+      if (error) {
+        setErr(error.message);
+        break;
+      }
+    }
+
+    setCardActingBookId("");
+    await loadActiveLoans();
+  }
+
   
 
   async function addBook(e) {
@@ -522,67 +567,91 @@ export default function Library({ onSignOut }) {
             padding: 16,
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 10,
+              flexWrap: "wrap",
+              alignItems: "center",
+            }}
+          >
             <div>
               <div style={{ fontWeight: 900 }}>Checked Out</div>
               <div style={{ fontSize: 13, opacity: 0.7 }}>
-                Who has what right now (active loans)
+                {loansLoading ? "Loading…" : `${activeLoans.length} active loan(s)`}
               </div>
             </div>
 
-            <button onClick={loadActiveLoans} style={btn()} disabled={loansLoading}>
-              {loansLoading ? "Loading…" : "Refresh list"}
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={loadActiveLoans} style={btn()} disabled={loansLoading}>
+                {loansLoading ? "Loading…" : "Refresh list"}
+              </button>
+
+              <button type="button" onClick={() => setLoansOpen((v) => !v)} style={btn()}>
+                {loansOpen ? "Minimize" : "Show list"}
+              </button>
+            </div>
           </div>
 
           {loansErr ? (
             <div style={{ marginTop: 10, color: "crimson", fontSize: 13 }}>{loansErr}</div>
           ) : null}
 
-          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-            {!loansLoading && activeLoans.length === 0 ? (
-              <div style={{ fontSize: 13, opacity: 0.75 }}>No books currently checked out.</div>
-            ) : null}
+          {loansOpen ? (
+            <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+              {!loansLoading && activeLoans.length === 0 ? (
+                <div style={{ fontSize: 13, opacity: 0.75 }}>No books currently checked out.</div>
+              ) : null}
 
-            {activeLoans.map((r) => (
-              <div
-                key={r.id}
-                style={{
-                  display: "flex",
-                  gap: 12,
-                  alignItems: "center",
-                  border: "1px solid #eee",
-                  borderRadius: 12,
-                  padding: 12,
-                  background: "white",
-                }}
-              >
-                <img
-                  src={r.book_cover_url || "/placeholder-cover.png"}
-                  alt=""
-                  style={{ width: 44, height: 66, objectFit: "cover", borderRadius: 6, border: "1px solid #eee" }}
-                />
+              {activeLoans.map((r) => (
+                <div
+                  key={r.id}
+                  style={{
+                    display: "flex",
+                    gap: 12,
+                    alignItems: "center",
+                    border: "1px solid #eee",
+                    borderRadius: 12,
+                    padding: 12,
+                    background: "white",
+                  }}
+                >
+                  <img
+                    src={r.book_cover_url || "/placeholder-cover.png"}
+                    alt=""
+                    style={{
+                      width: 44,
+                      height: 66,
+                      objectFit: "cover",
+                      borderRadius: 6,
+                      border: "1px solid #eee",
+                    }}
+                  />
 
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 900, lineHeight: 1.2 }}>
-                    {r.book_title}
-                    {r.book_author ? <span style={{ fontWeight: 600, opacity: 0.8 }}> — {r.book_author}</span> : null}
-                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 900, lineHeight: 1.2 }}>
+                      {r.book_title}
+                      {r.book_author ? (
+                        <span style={{ fontWeight: 600, opacity: 0.8 }}> — {r.book_author}</span>
+                      ) : null}
+                    </div>
 
-                  <div style={{ marginTop: 4, fontSize: 13 }}>
-                    Borrower: <span style={{ fontWeight: 800 }}>{r.borrower_name || "—"}</span>
-                    {r.borrower_class ? <span style={{ opacity: 0.8 }}> ({r.borrower_class})</span> : null}
-                  </div>
+                    <div style={{ marginTop: 4, fontSize: 13 }}>
+                      Borrower: <span style={{ fontWeight: 800 }}>{r.borrower_name || "—"}</span>
+                      {r.borrower_class ? <span style={{ opacity: 0.8 }}> ({r.borrower_class})</span> : null}
+                    </div>
 
-                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                    Checked out: {r.checked_out_time ? new Date(r.checked_out_time).toLocaleString() : "—"}
-                    {r.due_at ? ` • Due: ${new Date(r.due_at).toLocaleDateString()}` : ""}
-                    {r.copy_code ? ` • Copy: ${r.copy_code}` : ""}
+                    <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                      Checked out: {r.checked_out_time ? new Date(r.checked_out_time).toLocaleString() : "—"}
+                      {r.due_at ? ` • Due: ${new Date(r.due_at).toLocaleDateString()}` : ""}
+                      {r.copy_code ? ` • Copy: ${r.copy_code}` : ""}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -663,6 +732,9 @@ export default function Library({ onSignOut }) {
             .filter(Boolean);
 
           const subjectChips = Array.isArray(b.subjects) ? b.subjects : [];
+
+          const loansForBook = isAdmin ? loansByBookId.get(b.id) || [] : [];
+          const bookHasOut = isAdmin && loansForBook.length > 0;
 
           return (
             <div
@@ -762,16 +834,28 @@ export default function Library({ onSignOut }) {
                     Details
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDetailsAutoCheckout(true);
-                      setShowDetailsBook(b);
-                    }}
-                    style={btn()}
-                  >
-                    Check out
-                  </button>
+                  {bookHasOut ? (
+                    <button
+                      type="button"
+                      onClick={() => checkInBookFromCard(b.id)}
+                      style={{ ...btn(), opacity: cardActingBookId === b.id ? 0.6 : 1 }}
+                      disabled={cardActingBookId === b.id}
+                      title="Check in checked-out copies"
+                    >
+                      {cardActingBookId === b.id ? "Checking in…" : "Check in"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDetailsAutoCheckout(true);
+                        setShowDetailsBook(b);
+                      }}
+                      style={btn()}
+                    >
+                      Check out
+                    </button>
+                  )}
                 </div>
               </div>
 
