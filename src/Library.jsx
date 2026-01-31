@@ -2,6 +2,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient";
 
+// Hardcoded admin fallback (works even if profiles table is missing)
+const ADMIN_UID = "935b30a6-927e-4625-9cef-6e8a1581c33f";
+const ADMIN_EMAIL = "trevorjonfunk@gmail.com";
+
 export default function Library({ onSignOut }) {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
@@ -14,6 +18,11 @@ export default function Library({ onSignOut }) {
   // Role
   const [role, setRole] = useState("student");
   const isAdmin = role === "admin";
+
+  // Admin-only: active checkout list (who has what right now)
+  const [activeLoans, setActiveLoans] = useState([]);
+  const [loansLoading, setLoansLoading] = useState(false);
+  const [loansErr, setLoansErr] = useState("");
 
   // Category dropdown filter
   const CAT_ALL = "__ALL__";
@@ -42,18 +51,24 @@ export default function Library({ onSignOut }) {
     const user = u?.user;
     if (!user) return;
 
+    const hardAdmin =
+      user.id === ADMIN_UID ||
+      (user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+
+    // Preferred: read role from profiles
     const { data, error } = await supabase
       .from("profiles")
       .select("role")
       .eq("id", user.id)
       .single();
 
-    if (error) {
-      // If profiles missing for some reason, default to student (safe)
-      setRole("student");
+    if (!error && data?.role) {
+      setRole(data.role);
       return;
     }
-    setRole(data?.role || "student");
+
+    // Fallback if profiles is missing or unreadable
+    setRole(hardAdmin ? "admin" : "student");
   }
 
   async function loadMeta() {
@@ -90,12 +105,89 @@ export default function Library({ onSignOut }) {
     setLoading(false);
   }
 
+  async function loadActiveLoans() {
+    // Only admins should load the active checkout list (privacy + avoids RLS issues)
+    if (!isAdmin) {
+      setActiveLoans([]);
+      return;
+    }
+
+    setLoansLoading(true);
+    setLoansErr("");
+
+    try {
+      // Active (not checked in) loans
+      const { data: loans, error: loansError } = await supabase
+        .from("circulation")
+        .select("*")
+        .is("checked_in_at", null)
+        .order("checked_out_at", { ascending: false });
+
+      if (loansError) throw loansError;
+
+      const copyIds = [...new Set((loans || []).map((l) => l.copy_id).filter(Boolean))];
+
+      if (!copyIds.length) {
+        setActiveLoans([]);
+        return;
+      }
+
+      // Copies -> book_id (+ copy_code if present)
+      const { data: copies, error: copiesError } = await supabase
+        .from("book_copies")
+        .select("id, book_id, copy_code")
+        .in("id", copyIds);
+
+      if (copiesError) throw copiesError;
+
+      const copyById = new Map((copies || []).map((c) => [c.id, c]));
+      const bookIds = [...new Set((copies || []).map((c) => c.book_id).filter(Boolean))];
+
+      // Books -> title/author/cover
+      const { data: booksRows, error: booksError } = await supabase
+        .from("books")
+        .select("id, title, author, cover_url")
+        .in("id", bookIds);
+
+      if (booksError) throw booksError;
+
+      const bookById = new Map((booksRows || []).map((b) => [b.id, b]));
+
+      const merged = (loans || []).map((l) => {
+        const copy = copyById.get(l.copy_id);
+        const book = copy ? bookById.get(copy.book_id) : null;
+
+        return {
+          ...l,
+          copy_code: copy?.copy_code || "",
+          book_title: book?.title || "(Unknown book)",
+          book_author: book?.author || "",
+          book_cover_url: book?.cover_url || null,
+          checked_out_time: l.checked_out_at || l.created_at || null,
+        };
+      });
+
+      setActiveLoans(merged);
+    } catch (e) {
+      setLoansErr(e?.message || String(e));
+    } finally {
+      setLoansLoading(false);
+    }
+  }
+
+
   useEffect(() => {
     loadRole();
     loadMeta();
     loadBooks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+
+  useEffect(() => {
+    if (isAdmin) loadActiveLoans();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
 
   // ---- category counts + options (hide empty categories) ----
   const categoryCounts = useMemo(() => {
@@ -420,6 +512,80 @@ export default function Library({ onSignOut }) {
         <div style={{ marginTop: 10, color: "crimson", fontSize: 13 }}>{err}</div>
       ) : null}
 
+
+      {isAdmin ? (
+        <section
+          style={{
+            marginTop: 16,
+            border: "1px solid #ddd",
+            borderRadius: 16,
+            padding: 16,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontWeight: 900 }}>Checked Out</div>
+              <div style={{ fontSize: 13, opacity: 0.7 }}>
+                Who has what right now (active loans)
+              </div>
+            </div>
+
+            <button onClick={loadActiveLoans} style={btn()} disabled={loansLoading}>
+              {loansLoading ? "Loading…" : "Refresh list"}
+            </button>
+          </div>
+
+          {loansErr ? (
+            <div style={{ marginTop: 10, color: "crimson", fontSize: 13 }}>{loansErr}</div>
+          ) : null}
+
+          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+            {!loansLoading && activeLoans.length === 0 ? (
+              <div style={{ fontSize: 13, opacity: 0.75 }}>No books currently checked out.</div>
+            ) : null}
+
+            {activeLoans.map((r) => (
+              <div
+                key={r.id}
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "center",
+                  border: "1px solid #eee",
+                  borderRadius: 12,
+                  padding: 12,
+                  background: "white",
+                }}
+              >
+                <img
+                  src={r.book_cover_url || "/placeholder-cover.png"}
+                  alt=""
+                  style={{ width: 44, height: 66, objectFit: "cover", borderRadius: 6, border: "1px solid #eee" }}
+                />
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 900, lineHeight: 1.2 }}>
+                    {r.book_title}
+                    {r.book_author ? <span style={{ fontWeight: 600, opacity: 0.8 }}> — {r.book_author}</span> : null}
+                  </div>
+
+                  <div style={{ marginTop: 4, fontSize: 13 }}>
+                    Borrower: <span style={{ fontWeight: 800 }}>{r.borrower_name || "—"}</span>
+                    {r.borrower_class ? <span style={{ opacity: 0.8 }}> ({r.borrower_class})</span> : null}
+                  </div>
+
+                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                    Checked out: {r.checked_out_time ? new Date(r.checked_out_time).toLocaleString() : "—"}
+                    {r.due_at ? ` • Due: ${new Date(r.due_at).toLocaleDateString()}` : ""}
+                    {r.copy_code ? ` • Copy: ${r.copy_code}` : ""}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {/* Add Book (admin only) */}
       {isAdmin ? (
         <form
@@ -668,6 +834,7 @@ export default function Library({ onSignOut }) {
           book={showDetailsBook}
           isAdmin={isAdmin}
           autoCheckout={detailsAutoCheckout}
+          onCirculationChanged={loadActiveLoans}
           deleting={deletingId === showDetailsBook.id}
           onClose={() => {
             setShowDetailsBook(null);
@@ -741,6 +908,7 @@ export default function Library({ onSignOut }) {
         <ManageCopiesModal
           book={managingCopiesBook}
           onClose={() => setManagingCopiesBook(null)}
+          onCirculationChanged={loadActiveLoans}
         />
       ) : null}
     </div>
@@ -760,6 +928,7 @@ function BookDetailsModal({
   onDelete,
   deleting,
   autoCheckout,
+  onCirculationChanged,
 }) {
   const categoryChips = (book.book_categories || [])
     .map((bc) => bc.categories?.name)
@@ -916,6 +1085,7 @@ function BookDetailsModal({
             autoCheckout={autoCheckout}
             canCheckin={isAdmin}
             showLoanInfo={isAdmin}
+            onCirculationChanged={onCirculationChanged}
           />
         </div>
       </div>
@@ -1280,7 +1450,7 @@ function EditInfoModal({ book, onClose, onSave }) {
 /* =========================
    COPIES (shared) + ManageCopiesModal wrapper
 ========================= */
-function ManageCopiesModal({ book, onClose }) {
+function ManageCopiesModal({ book, onClose, onCirculationChanged }) {
   return (
     <Modal title="Manage copies" subtitle={book.title} onClose={onClose} zIndex={70}>
       <CopiesSection
@@ -1289,12 +1459,13 @@ function ManageCopiesModal({ book, onClose }) {
         autoCheckout={false}
         canCheckin={true}
         showLoanInfo={true}
+        onCirculationChanged={onCirculationChanged}
       />
     </Modal>
   );
 }
 
-function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin = true, showLoanInfo = true }) {
+function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin = true, showLoanInfo = true, onCirculationChanged }) {
   const [copies, setCopies] = useState([]);
   const [loanByCopyId, setLoanByCopyId] = useState({});
   const [loading, setLoading] = useState(false);
@@ -1462,6 +1633,7 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
     setBorrower("");
     setDueDate("");
     await loadCopies();
+    if (onCirculationChanged) await onCirculationChanged();
   }
 
   async function checkinCopy(copyId) {
@@ -1477,6 +1649,7 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
     }
 
     await loadCopies();
+    if (onCirculationChanged) await onCirculationChanged();
   }
 
   const availableCount = copies.filter((c) => c.status === "available").length;
