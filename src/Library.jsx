@@ -1444,9 +1444,11 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
 
     const { error } = await supabase.rpc("checkout_copy", {
       p_copy_id: copyId,
-      p_borrower: who,
-      p_due_date: dueDate || null,
+      p_borrower_name: who,
+      p_borrower_class: null,              // or "" if you prefer
+      p_due_at: dueDate ? new Date(dueDate + "T23:59:59").toISOString() : null,
     });
+    
 
     setActingId("");
     if (error) {
