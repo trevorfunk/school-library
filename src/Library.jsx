@@ -57,29 +57,23 @@ export default function Library({ onSignOut, onHome }) {
       user.id === ADMIN_UID ||
       (user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
 
-    // Preferred: read role from profiles
-    const hardAdmin =
-      user.id === ADMIN_UID ||
-      (user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+    // Preferred: read role from profiles (if it exists)
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .single();
 
-    // Preferred: read role from profiles
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .single();
-
-    if (!error && data?.role) {
-      setRole(data.role);
-    if (!error && data?.role) {
-      setRole(data.role);
-      return;
+      if (!error && data?.role) {
+        setRole(data.role);
+        return;
+      }
+    } catch {
+      // ignore
     }
 
-    // Fallback if profiles is missing or unreadable
-    setRole(hardAdmin ? "admin" : "student");
-
-    // Fallback if profiles is missing or unreadable
+    // Fallback
     setRole(hardAdmin ? "admin" : "student");
   }
 
@@ -118,7 +112,7 @@ export default function Library({ onSignOut, onHome }) {
   }
 
   async function loadActiveLoans() {
-    // Only admins should load the active checkout list (privacy + avoids RLS issues)
+    // Only admins should load the active checkout list
     if (!isAdmin) {
       setActiveLoans([]);
       return;
@@ -189,8 +183,6 @@ export default function Library({ onSignOut, onHome }) {
     }
   }
 
-
-  
   async function checkInFromCheckedOutList(copyId) {
     if (!isAdmin) return;
 
@@ -207,16 +199,15 @@ export default function Library({ onSignOut, onHome }) {
     }
 
     await loadActiveLoans();
+    await loadBooks();
   }
 
-
-useEffect(() => {
+  useEffect(() => {
     loadRole();
     loadMeta();
     loadBooks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
 
   useEffect(() => {
     if (isAdmin) loadActiveLoans();
@@ -233,7 +224,6 @@ useEffect(() => {
     }
     return m;
   }, [activeLoans]);
-
 
   // ---- category counts + options (hide empty categories) ----
   const categoryCounts = useMemo(() => {
@@ -273,6 +263,7 @@ useEffect(() => {
     }
 
     return opts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [books.length, categoryCounts, CAT_ALL, CAT_UNC]);
 
   // If you’re on a category that becomes empty, bounce back to All
@@ -291,13 +282,13 @@ useEffect(() => {
   // ---- filtered list (category dropdown + search) ----
   const filtered = useMemo(() => {
     const qq = q.trim().toLowerCase();
-  
+
     return books
       .filter((b) => {
         const themeNames = (b.book_themes || []).map((bt) => bt.themes?.name || "");
         const categoryNames = (b.book_categories || []).map((bc) => bc.categories?.name || "");
         const subjectsList = Array.isArray(b.subjects) ? b.subjects : [];
-  
+
         // 1) category filter
         if (categoryFilter !== CAT_ALL) {
           if (categoryFilter === CAT_UNC) {
@@ -306,10 +297,10 @@ useEffect(() => {
             if (!categoryNames.some((n) => n === categoryFilter)) return false;
           }
         }
-  
+
         // 2) search filter
         if (!qq) return true;
-  
+
         const haystack = [
           b.title || "",
           b.author || "",
@@ -320,14 +311,13 @@ useEffect(() => {
         ]
           .join(" ")
           .toLowerCase();
-  
+
         return haystack.includes(qq);
       })
       .sort((a, b) =>
         (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" })
       );
   }, [books, q, categoryFilter, CAT_ALL, CAT_UNC]);
-  
 
   async function addBook(e) {
     e.preventDefault();
@@ -503,6 +493,7 @@ useEffect(() => {
             </span>
           </div>
         </div>
+
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {onHome ? (
             <button
@@ -575,7 +566,7 @@ useEffect(() => {
         <div style={{ marginTop: 10, color: "crimson", fontSize: 13 }}>{err}</div>
       ) : null}
 
-
+      {/* ADMIN: Checked out list */}
       {isAdmin ? (
         <section
           style={{
@@ -588,17 +579,11 @@ useEffect(() => {
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <div>
               <div style={{ fontWeight: 900 }}>Checked Out</div>
-              <div style={{ fontSize: 13, opacity: 0.7 }}>
-                Who has what right now (active loans)
-              </div>
+              <div style={{ fontSize: 13, opacity: 0.7 }}>Who has what right now (active loans)</div>
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => setLoansOpen((v) => !v)}
-                style={btn()}
-              >
+              <button type="button" onClick={() => setLoansOpen((v) => !v)} style={btn()}>
                 {loansOpen ? "Hide list" : `Show list (${activeLoans.length})`}
               </button>
 
@@ -611,65 +596,73 @@ useEffect(() => {
           {loansOpen ? (
             <>
               {loansErr ? (
-            <div style={{ marginTop: 10, color: "crimson", fontSize: 13 }}>{loansErr}</div>
-          ) : null}
+                <div style={{ marginTop: 10, color: "crimson", fontSize: 13 }}>{loansErr}</div>
+              ) : null}
 
-          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-            {!loansLoading && activeLoans.length === 0 ? (
-              <div style={{ fontSize: 13, opacity: 0.75 }}>No books currently checked out.</div>
-            ) : null}
+              <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                {!loansLoading && activeLoans.length === 0 ? (
+                  <div style={{ fontSize: 13, opacity: 0.75 }}>No books currently checked out.</div>
+                ) : null}
 
-            {activeLoans.map((r) => (
-              <div
-                key={r.id}
-                style={{
-                  display: "flex",
-                  gap: 12,
-                  alignItems: "center",
-                  border: "1px solid #eee",
-                  borderRadius: 12,
-                  padding: 12,
-                  background: "white",
-                }}
-              >
-                <img
-                  src={r.book_cover_url || "/placeholder-cover.png"}
-                  alt=""
-                  style={{ width: 44, height: 66, objectFit: "cover", borderRadius: 6, border: "1px solid #eee" }}
-                />
-
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 900, lineHeight: 1.2 }}>
-                    {r.book_title}
-                    {r.book_author ? <span style={{ fontWeight: 600, opacity: 0.8 }}> — {r.book_author}</span> : null}
-                  </div>
-
-                  <div style={{ marginTop: 4, fontSize: 13 }}>
-                    Borrower: <span style={{ fontWeight: 800 }}>{r.borrower_name || "—"}</span>
-                    {r.borrower_class ? <span style={{ opacity: 0.8 }}> ({r.borrower_class})</span> : null}
-                  </div>
-
-                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                    Checked out: {r.checked_out_time ? new Date(r.checked_out_time).toLocaleString() : "—"}
-                    {r.due_at ? ` • Due: ${new Date(r.due_at).toLocaleDateString()}` : ""}
-                    {r.copy_code ? ` • Copy: ${r.copy_code}` : ""}
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", alignItems: "center" }}>
-                  <button
-                    type="button"
-                    onClick={() => checkInFromCheckedOutList(r.copy_id)}
-                    disabled={loanActingCopyId === r.copy_id}
-                    style={{ ...btn(), opacity: loanActingCopyId === r.copy_id ? 0.6 : 1 }}
-                    title="Check this copy back in"
+                {activeLoans.map((r) => (
+                  <div
+                    key={r.id}
+                    style={{
+                      display: "flex",
+                      gap: 12,
+                      alignItems: "center",
+                      border: "1px solid #eee",
+                      borderRadius: 12,
+                      padding: 12,
+                      background: "white",
+                    }}
                   >
-                    {loanActingCopyId === r.copy_id ? "Checking in…" : "Check in"}
-                  </button>
-                </div>
+                    <img
+                      src={r.book_cover_url || "/placeholder-cover.png"}
+                      alt=""
+                      style={{
+                        width: 44,
+                        height: 66,
+                        objectFit: "cover",
+                        borderRadius: 6,
+                        border: "1px solid #eee",
+                      }}
+                    />
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 900, lineHeight: 1.2 }}>
+                        {r.book_title}
+                        {r.book_author ? (
+                          <span style={{ fontWeight: 600, opacity: 0.8 }}> — {r.book_author}</span>
+                        ) : null}
+                      </div>
+
+                      <div style={{ marginTop: 4, fontSize: 13 }}>
+                        Borrower: <span style={{ fontWeight: 800 }}>{r.borrower_name || "—"}</span>
+                        {r.borrower_class ? <span style={{ opacity: 0.8 }}> ({r.borrower_class})</span> : null}
+                      </div>
+
+                      <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
+                        Checked out: {r.checked_out_time ? new Date(r.checked_out_time).toLocaleString() : "—"}
+                        {r.due_at ? ` • Due: ${new Date(r.due_at).toLocaleDateString()}` : ""}
+                        {r.copy_code ? ` • Copy: ${r.copy_code}` : ""}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        onClick={() => checkInFromCheckedOutList(r.copy_id)}
+                        disabled={loanActingCopyId === r.copy_id}
+                        style={{ ...btn(), opacity: loanActingCopyId === r.copy_id ? 0.6 : 1 }}
+                        title="Check this copy back in"
+                      >
+                        {loanActingCopyId === r.copy_id ? "Checking in…" : "Check in"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
             </>
           ) : (
             <div style={{ marginTop: 10, fontSize: 13, opacity: 0.75 }}>
@@ -761,10 +754,7 @@ useEffect(() => {
           const bookHasActiveLoan = isAdmin && bookActiveCopyIds.length > 0;
 
           return (
-            <div
-              key={b.id}
-              style={{ border: "1px solid #ddd", borderRadius: 16, padding: 16 }}
-            >
+            <div key={b.id} style={{ border: "1px solid #ddd", borderRadius: 16, padding: 16 }}>
               {/* Header row: cover + title + ONLY Details/Check out */}
               <div
                 style={{
@@ -839,9 +829,7 @@ useEffect(() => {
                     >
                       {b.title}
                     </button>
-                    {b.author ? (
-                      <div style={{ fontSize: 13, opacity: 0.8 }}>{b.author}</div>
-                    ) : null}
+                    {b.author ? <div style={{ fontSize: 13, opacity: 0.8 }}>{b.author}</div> : null}
                   </div>
                 </div>
 
@@ -884,9 +872,7 @@ useEffect(() => {
                 </div>
               </div>
 
-              {b.description ? (
-                <div style={{ marginTop: 8, fontSize: 14 }}>{b.description}</div>
-              ) : null}
+              {b.description ? <div style={{ marginTop: 8, fontSize: 14 }}>{b.description}</div> : null}
 
               {/* Subjects */}
               <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -900,9 +886,7 @@ useEffect(() => {
                   <span style={{ fontSize: 12, opacity: 0.6 }}>No subjects yet</span>
                 )}
                 {subjectChips.length > 10 ? (
-                  <span style={{ fontSize: 12, opacity: 0.6 }}>
-                    +{subjectChips.length - 10} more
-                  </span>
+                  <span style={{ fontSize: 12, opacity: 0.6 }}>+{subjectChips.length - 10} more</span>
                 ) : null}
               </div>
 
@@ -943,7 +927,6 @@ useEffect(() => {
           book={showDetailsBook}
           isAdmin={isAdmin}
           autoCheckout={detailsAutoCheckout}
-          onCirculationChanged={loadActiveLoans}
           onCirculationChanged={loadActiveLoans}
           deleting={deletingId === showDetailsBook.id}
           onClose={() => {
@@ -1019,7 +1002,6 @@ useEffect(() => {
           book={managingCopiesBook}
           onClose={() => setManagingCopiesBook(null)}
           onCirculationChanged={loadActiveLoans}
-          onCirculationChanged={loadActiveLoans}
         />
       ) : null}
     </div>
@@ -1039,7 +1021,6 @@ function BookDetailsModal({
   onDelete,
   deleting,
   autoCheckout,
-  onCirculationChanged,
   onCirculationChanged,
 }) {
   const categoryChips = (book.book_categories || [])
@@ -1093,18 +1074,12 @@ function BookDetailsModal({
           {/* Info */}
           <div style={{ flex: "1 1 520px", minWidth: 260 }}>
             <div style={{ fontSize: 20, fontWeight: 900 }}>{book.title}</div>
-            {book.author ? (
-              <div style={{ marginTop: 4, opacity: 0.8 }}>{book.author}</div>
-            ) : null}
+            {book.author ? <div style={{ marginTop: 4, opacity: 0.8 }}>{book.author}</div> : null}
 
             {book.description ? (
-              <div style={{ marginTop: 10, fontSize: 14, lineHeight: 1.5 }}>
-                {book.description}
-              </div>
+              <div style={{ marginTop: 10, fontSize: 14, lineHeight: 1.5 }}>{book.description}</div>
             ) : (
-              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.65 }}>
-                No description yet.
-              </div>
+              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.65 }}>No description yet.</div>
             )}
 
             {/* Admin actions only */}
@@ -1197,7 +1172,6 @@ function BookDetailsModal({
             autoCheckout={autoCheckout}
             canCheckin={isAdmin}
             showLoanInfo={isAdmin}
-            onCirculationChanged={onCirculationChanged}
             onCirculationChanged={onCirculationChanged}
           />
         </div>
@@ -1430,12 +1404,7 @@ function EditInfoModal({ book, onClose, onSave }) {
               />
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <input
-                  type="file"
-                  accept="image/*"
-                  disabled={uploading}
-                  onChange={(e) => uploadCoverFile(e.target.files?.[0])}
-                />
+                <input type="file" accept="image/*" disabled={uploading} onChange={(e) => uploadCoverFile(e.target.files?.[0])} />
                 <button type="button" onClick={() => setCoverUrl("")} style={btn()} disabled={uploading}>
                   Remove cover
                 </button>
@@ -1523,9 +1492,7 @@ function EditInfoModal({ book, onClose, onSave }) {
               <div style={{ fontSize: 12, opacity: 0.65 }}>No subjects set.</div>
             )}
             {subjectsPreview.length > 30 ? (
-              <div style={{ fontSize: 12, opacity: 0.65 }}>
-                (+{subjectsPreview.length - 30} more)
-              </div>
+              <div style={{ fontSize: 12, opacity: 0.65 }}>(+{subjectsPreview.length - 30} more)</div>
             ) : null}
           </div>
         </div>
@@ -1564,7 +1531,6 @@ function EditInfoModal({ book, onClose, onSave }) {
    COPIES (shared) + ManageCopiesModal wrapper
 ========================= */
 function ManageCopiesModal({ book, onClose, onCirculationChanged }) {
-function ManageCopiesModal({ book, onClose, onCirculationChanged }) {
   return (
     <Modal title="Manage copies" subtitle={book.title} onClose={onClose} zIndex={70}>
       <CopiesSection
@@ -1574,14 +1540,19 @@ function ManageCopiesModal({ book, onClose, onCirculationChanged }) {
         canCheckin={true}
         showLoanInfo={true}
         onCirculationChanged={onCirculationChanged}
-        onCirculationChanged={onCirculationChanged}
       />
     </Modal>
   );
 }
 
-function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin = true, showLoanInfo = true, onCirculationChanged }) {
-function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin = true, showLoanInfo = true, onCirculationChanged }) {
+function CopiesSection({
+  book,
+  allowInventory,
+  autoCheckout = false,
+  canCheckin = true,
+  showLoanInfo = true,
+  onCirculationChanged,
+}) {
   const [copies, setCopies] = useState([]);
   const [loanByCopyId, setLoanByCopyId] = useState({});
   const [loading, setLoading] = useState(false);
@@ -1732,15 +1703,9 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
     const { error } = await supabase.rpc("checkout_copy", {
       p_copy_id: copyId,
       p_borrower_name: who,
-      p_borrower_class: null,              // or "" if you prefer
-      p_due_at: dueDate ? new Date(dueDate + "T23:59:59").toISOString() : null,
-      p_borrower_name: who,
-      p_borrower_class: null,              // or "" if you prefer
+      p_borrower_class: null,
       p_due_at: dueDate ? new Date(dueDate + "T23:59:59").toISOString() : null,
     });
-    
-
-    
 
     setActingId("");
     if (error) {
@@ -1754,7 +1719,6 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
     setBorrower("");
     setDueDate("");
     await loadCopies();
-    if (onCirculationChanged) await onCirculationChanged();
     if (onCirculationChanged) await onCirculationChanged();
   }
 
@@ -1771,7 +1735,6 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
     }
 
     await loadCopies();
-    if (onCirculationChanged) await onCirculationChanged();
     if (onCirculationChanged) await onCirculationChanged();
   }
 
@@ -1807,7 +1770,14 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
       </div>
 
       {msg ? (
-        <div style={{ marginTop: 10, color: msg.includes("Can’t") ? "crimson" : "#111", fontSize: 13, whiteSpace: "pre-wrap" }}>
+        <div
+          style={{
+            marginTop: 10,
+            color: msg.includes("Can’t") ? "crimson" : "#111",
+            fontSize: 13,
+            whiteSpace: "pre-wrap",
+          }}
+        >
           {msg}
         </div>
       ) : null}
@@ -1926,9 +1896,7 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
           );
         })}
 
-        {copies.length === 0 && !loading ? (
-          <div style={{ padding: 12, opacity: 0.75 }}>No copies yet.</div>
-        ) : null}
+        {copies.length === 0 && !loading ? <div style={{ padding: 12, opacity: 0.75 }}>No copies yet.</div> : null}
       </div>
     </div>
   );
@@ -1945,12 +1913,8 @@ function Modal({ title, subtitle, onClose, zIndex = 50, children }) {
         inset: 0,
         background: "rgba(0,0,0,0.35)",
         zIndex,
-
-        // ✅ allow the modal to scroll if content is taller than the screen
         overflowY: "auto",
         padding: 16,
-
-        // ✅ better on mobile (prevents iOS weirdness sometimes)
         WebkitOverflowScrolling: "touch",
       }}
       onMouseDown={onClose}
@@ -1962,14 +1926,8 @@ function Modal({ title, subtitle, onClose, zIndex = 50, children }) {
           borderRadius: 16,
           border: "1px solid #ddd",
           padding: 16,
-
-          // ✅ centers horizontally, keeps top/bottom breathing room
           margin: "16px auto",
-
-          // ✅ ensures content never goes off-screen
           maxHeight: "calc(100vh - 32px)",
-
-          // ✅ scroll inside the modal when needed
           overflow: "auto",
         }}
         onMouseDown={(e) => e.stopPropagation()}
@@ -1980,8 +1938,6 @@ function Modal({ title, subtitle, onClose, zIndex = 50, children }) {
             justifyContent: "space-between",
             gap: 12,
             alignItems: "flex-start",
-
-            // ✅ optional: keeps header visible when scrolling long content
             position: "sticky",
             top: 0,
             background: "white",
@@ -2003,7 +1959,6 @@ function Modal({ title, subtitle, onClose, zIndex = 50, children }) {
     </div>
   );
 }
-
 
 function btn() {
   return {
