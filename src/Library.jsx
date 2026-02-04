@@ -6,7 +6,7 @@ import { supabase } from "./supabaseClient";
 const ADMIN_UID = "935b30a6-927e-4625-9cef-6e8a1581c33f";
 const ADMIN_EMAIL = "trevorjonfunk@gmail.com";
 
-export default function Library({ onSignOut }) {
+export default function Library({ onSignOut, onHome }) {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -23,6 +23,7 @@ export default function Library({ onSignOut }) {
   const [activeLoans, setActiveLoans] = useState([]);
   const [loansLoading, setLoansLoading] = useState(false);
   const [loansErr, setLoansErr] = useState("");
+  const [loansOpen, setLoansOpen] = useState(false);
   const [loanActingCopyId, setLoanActingCopyId] = useState("");
 
   // Category dropdown filter
@@ -57,6 +58,11 @@ export default function Library({ onSignOut }) {
       (user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
 
     // Preferred: read role from profiles
+    const hardAdmin =
+      user.id === ADMIN_UID ||
+      (user.email && user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+
+    // Preferred: read role from profiles
     const { data, error } = await supabase
       .from("profiles")
       .select("role")
@@ -65,8 +71,13 @@ export default function Library({ onSignOut }) {
 
     if (!error && data?.role) {
       setRole(data.role);
+    if (!error && data?.role) {
+      setRole(data.role);
       return;
     }
+
+    // Fallback if profiles is missing or unreadable
+    setRole(hardAdmin ? "admin" : "student");
 
     // Fallback if profiles is missing or unreadable
     setRole(hardAdmin ? "admin" : "student");
@@ -156,10 +167,12 @@ export default function Library({ onSignOut }) {
 
       const merged = (loans || []).map((l) => {
         const copy = copyById.get(l.copy_id);
-        const book = copy ? bookById.get(copy.book_id) : null;
+        const bookId = copy ? copy.book_id : null;
+        const book = bookId ? bookById.get(bookId) : null;
 
         return {
           ...l,
+          book_id: bookId,
           copy_code: copy?.copy_code || "",
           book_title: book?.title || "(Unknown book)",
           book_author: book?.author || "",
@@ -209,6 +222,18 @@ useEffect(() => {
     if (isAdmin) loadActiveLoans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
+
+  const activeCopyIdsByBookId = useMemo(() => {
+    const m = new Map();
+    for (const r of activeLoans) {
+      if (!r.book_id || !r.copy_id) continue;
+      const arr = m.get(r.book_id) || [];
+      arr.push(r.copy_id);
+      m.set(r.book_id, arr);
+    }
+    return m;
+  }, [activeLoans]);
+
 
   // ---- category counts + options (hide empty categories) ----
   const categoryCounts = useMemo(() => {
@@ -478,18 +503,35 @@ useEffect(() => {
             </span>
           </div>
         </div>
-        <button
-          onClick={onSignOut}
-          style={{
-            padding: 10,
-            borderRadius: 10,
-            border: "1px solid #ddd",
-            cursor: "pointer",
-            background: "white",
-          }}
-        >
-          Sign out
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {onHome ? (
+            <button
+              onClick={onHome}
+              style={{
+                padding: 10,
+                borderRadius: 10,
+                border: "1px solid #ddd",
+                cursor: "pointer",
+                background: "white",
+              }}
+            >
+              Home
+            </button>
+          ) : null}
+
+          <button
+            onClick={onSignOut}
+            style={{
+              padding: 10,
+              borderRadius: 10,
+              border: "1px solid #ddd",
+              cursor: "pointer",
+              background: "white",
+            }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       {/* Search + Category dropdown */}
@@ -551,12 +593,24 @@ useEffect(() => {
               </div>
             </div>
 
-            <button onClick={loadActiveLoans} style={btn()} disabled={loansLoading}>
-              {loansLoading ? "Loading…" : "Refresh list"}
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setLoansOpen((v) => !v)}
+                style={btn()}
+              >
+                {loansOpen ? "Hide list" : `Show list (${activeLoans.length})`}
+              </button>
+
+              <button onClick={loadActiveLoans} style={btn()} disabled={loansLoading}>
+                {loansLoading ? "Loading…" : "Refresh list"}
+              </button>
+            </div>
           </div>
 
-          {loansErr ? (
+          {loansOpen ? (
+            <>
+              {loansErr ? (
             <div style={{ marginTop: 10, color: "crimson", fontSize: 13 }}>{loansErr}</div>
           ) : null}
 
@@ -600,22 +654,28 @@ useEffect(() => {
                     {r.due_at ? ` • Due: ${new Date(r.due_at).toLocaleDateString()}` : ""}
                     {r.copy_code ? ` • Copy: ${r.copy_code}` : ""}
                   </div>
+                </div>
 
-                  <div style={{ display: "flex", alignItems: "center" }}>
-                    <button
-                      type="button"
-                      onClick={() => checkInFromCheckedOutList(r.copy_id)}
-                      disabled={loanActingCopyId === r.copy_id}
-                      style={{ ...btn(), opacity: loanActingCopyId === r.copy_id ? 0.6 : 1 }}
-                      title="Check this copy back in"
-                    >
-                      {loanActingCopyId === r.copy_id ? "Checking in…" : "Check in"}
-                    </button>
-                  </div>
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    onClick={() => checkInFromCheckedOutList(r.copy_id)}
+                    disabled={loanActingCopyId === r.copy_id}
+                    style={{ ...btn(), opacity: loanActingCopyId === r.copy_id ? 0.6 : 1 }}
+                    title="Check this copy back in"
+                  >
+                    {loanActingCopyId === r.copy_id ? "Checking in…" : "Check in"}
+                  </button>
                 </div>
               </div>
             ))}
           </div>
+            </>
+          ) : (
+            <div style={{ marginTop: 10, fontSize: 13, opacity: 0.75 }}>
+              {activeLoans.length} active loan(s)
+            </div>
+          )}
         </section>
       ) : null}
 
@@ -696,6 +756,9 @@ useEffect(() => {
             .filter(Boolean);
 
           const subjectChips = Array.isArray(b.subjects) ? b.subjects : [];
+
+          const bookActiveCopyIds = activeCopyIdsByBookId.get(b.id) || [];
+          const bookHasActiveLoan = isAdmin && bookActiveCopyIds.length > 0;
 
           return (
             <div
@@ -798,12 +861,25 @@ useEffect(() => {
                   <button
                     type="button"
                     onClick={() => {
+                      // Admin: if this book is currently checked out, allow quick check-in (single copy),
+                      // or open Details if multiple copies are out.
+                      if (bookHasActiveLoan) {
+                        if (bookActiveCopyIds.length === 1) {
+                          checkInFromCheckedOutList(bookActiveCopyIds[0]);
+                          return;
+                        }
+                        setDetailsAutoCheckout(false);
+                        setShowDetailsBook(b);
+                        return;
+                      }
+
+                      // Default: open Details and auto-select first available copy to check out
                       setDetailsAutoCheckout(true);
                       setShowDetailsBook(b);
                     }}
                     style={btn()}
                   >
-                    Check out
+                    {bookHasActiveLoan ? "Check in" : "Check out"}
                   </button>
                 </div>
               </div>
@@ -867,6 +943,7 @@ useEffect(() => {
           book={showDetailsBook}
           isAdmin={isAdmin}
           autoCheckout={detailsAutoCheckout}
+          onCirculationChanged={loadActiveLoans}
           onCirculationChanged={loadActiveLoans}
           deleting={deletingId === showDetailsBook.id}
           onClose={() => {
@@ -942,6 +1019,7 @@ useEffect(() => {
           book={managingCopiesBook}
           onClose={() => setManagingCopiesBook(null)}
           onCirculationChanged={loadActiveLoans}
+          onCirculationChanged={loadActiveLoans}
         />
       ) : null}
     </div>
@@ -961,6 +1039,7 @@ function BookDetailsModal({
   onDelete,
   deleting,
   autoCheckout,
+  onCirculationChanged,
   onCirculationChanged,
 }) {
   const categoryChips = (book.book_categories || [])
@@ -1118,6 +1197,7 @@ function BookDetailsModal({
             autoCheckout={autoCheckout}
             canCheckin={isAdmin}
             showLoanInfo={isAdmin}
+            onCirculationChanged={onCirculationChanged}
             onCirculationChanged={onCirculationChanged}
           />
         </div>
@@ -1484,6 +1564,7 @@ function EditInfoModal({ book, onClose, onSave }) {
    COPIES (shared) + ManageCopiesModal wrapper
 ========================= */
 function ManageCopiesModal({ book, onClose, onCirculationChanged }) {
+function ManageCopiesModal({ book, onClose, onCirculationChanged }) {
   return (
     <Modal title="Manage copies" subtitle={book.title} onClose={onClose} zIndex={70}>
       <CopiesSection
@@ -1493,11 +1574,13 @@ function ManageCopiesModal({ book, onClose, onCirculationChanged }) {
         canCheckin={true}
         showLoanInfo={true}
         onCirculationChanged={onCirculationChanged}
+        onCirculationChanged={onCirculationChanged}
       />
     </Modal>
   );
 }
 
+function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin = true, showLoanInfo = true, onCirculationChanged }) {
 function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin = true, showLoanInfo = true, onCirculationChanged }) {
   const [copies, setCopies] = useState([]);
   const [loanByCopyId, setLoanByCopyId] = useState({});
@@ -1651,7 +1734,12 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
       p_borrower_name: who,
       p_borrower_class: null,              // or "" if you prefer
       p_due_at: dueDate ? new Date(dueDate + "T23:59:59").toISOString() : null,
+      p_borrower_name: who,
+      p_borrower_class: null,              // or "" if you prefer
+      p_due_at: dueDate ? new Date(dueDate + "T23:59:59").toISOString() : null,
     });
+    
+
     
 
     setActingId("");
@@ -1666,6 +1754,7 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
     setBorrower("");
     setDueDate("");
     await loadCopies();
+    if (onCirculationChanged) await onCirculationChanged();
     if (onCirculationChanged) await onCirculationChanged();
   }
 
@@ -1682,6 +1771,7 @@ function CopiesSection({ book, allowInventory, autoCheckout = false, canCheckin 
     }
 
     await loadCopies();
+    if (onCirculationChanged) await onCirculationChanged();
     if (onCirculationChanged) await onCirculationChanged();
   }
 
