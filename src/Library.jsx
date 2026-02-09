@@ -1739,13 +1739,59 @@ function CopiesSection({
   }
 
   const availableCount = copies.filter((c) => c.status === "available").length;
-  const checkedOutCount = copies.filter((c) => c.status === "checked_out").length;
+const checkedOutCount = copies.filter((c) => c.status === "checked_out").length;
+const missingCount = copies.filter((c) => c.status === "missing").length;
+
+async function setMissing(copyId) {
+  const copy = copies.find((x) => x.id === copyId);
+  if (copy?.status === "checked_out") {
+    setMsg("Can’t mark a checked-out copy as missing. Check it in first.");
+    return;
+  }
+
+  setActingId(copyId);
+  setMsg("");
+
+  const { error } = await supabase
+    .from("book_copies")
+    .update({ status: "missing" })
+    .eq("id", copyId);
+
+  setActingId("");
+  if (error) return setMsg(error.message);
+
+  await loadCopies();
+  if (onCirculationChanged) await onCirculationChanged();
+}
+
+async function setFound(copyId) {
+  const copy = copies.find((x) => x.id === copyId);
+  if (copy?.status !== "missing") return;
+
+  setActingId(copyId);
+  setMsg("");
+
+  const { error } = await supabase
+    .from("book_copies")
+    .update({ status: "available" })
+    .eq("id", copyId);
+
+  setActingId("");
+  if (error) return setMsg(error.message);
+
+  await loadCopies();
+  if (onCirculationChanged) await onCirculationChanged();
+}
+
 
   return (
     <div>
       <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <div style={{ fontSize: 13, opacity: 0.75 }}>
-          {loading ? "Loading…" : `${copies.length} copies • ${availableCount} available • ${checkedOutCount} out`}
+        {loading
+  ? "Loading…"
+  : `${copies.length} copies • ${availableCount} available • ${checkedOutCount} out • ${missingCount} missing`}
+
         </div>
 
         {allowInventory ? (
@@ -1852,46 +1898,93 @@ function CopiesSection({
               </div>
 
               <div style={{ padding: 10 }}>
-                {c.status === "available" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCheckoutFor(c.id);
-                      setBorrower("");
-                      setDueDate("");
-                    }}
-                    style={btn()}
-                  >
-                    Check out
-                  </button>
-                ) : canCheckin ? (
-                  <div style={{ display: "grid", gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => checkinCopy(c.id)}
-                      style={{ ...btn(), opacity: actingId === c.id ? 0.6 : 1 }}
-                      disabled={actingId === c.id}
-                    >
-                      {actingId === c.id ? "Checking in…" : "Check in"}
-                    </button>
+  {c.status === "available" ? (
+    <div style={{ display: "grid", gap: 8 }}>
+      <button
+        type="button"
+        onClick={() => {
+          setCheckoutFor(c.id);
+          setBorrower("");
+          setDueDate("");
+        }}
+        style={btn()}
+      >
+        Check out
+      </button>
 
-                    {allowInventory ? (
-                      <button
-                        type="button"
-                        onClick={() => removeCopy(c.id, c.copy_code)}
-                        disabled={removingId === c.id}
-                        style={{ ...btn(), opacity: removingId === c.id ? 0.6 : 1 }}
-                      >
-                        {removingId === c.id ? "…" : "Remove"}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : (
-                  <button type="button" disabled style={{ ...btn(), opacity: 0.6, cursor: "not-allowed" }}>
-                    Unavailable
-                  </button>
-                )}
-              </div>
+      {/* RED missing button */}
+      {canCheckin ? (
+        <button
+          type="button"
+          onClick={() => setMissing(c.id)}
+          disabled={actingId === c.id}
+          style={{
+            ...btn(),
+            borderColor: "crimson",
+            color: "crimson",
+            fontWeight: 800,
+            opacity: actingId === c.id ? 0.6 : 1,
+          }}
+          title="Mark this copy as missing"
+        >
+          {actingId === c.id ? "…" : "Missing"}
+        </button>
+      ) : null}
+    </div>
+  ) : c.status === "missing" ? (
+    <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ fontSize: 12, color: "crimson", fontWeight: 900 }}>MISSING</div>
+
+      <button
+        type="button"
+        onClick={() => setFound(c.id)}
+        disabled={actingId === c.id}
+        style={{ ...btn(), opacity: actingId === c.id ? 0.6 : 1 }}
+        title="Mark as found"
+      >
+        {actingId === c.id ? "…" : "Found"}
+      </button>
+
+      {allowInventory ? (
+        <button
+          type="button"
+          onClick={() => removeCopy(c.id, c.copy_code)}
+          disabled={removingId === c.id}
+          style={{ ...btn(), opacity: removingId === c.id ? 0.6 : 1 }}
+        >
+          {removingId === c.id ? "…" : "Remove"}
+        </button>
+      ) : null}
+    </div>
+  ) : canCheckin ? (
+    <div style={{ display: "grid", gap: 8 }}>
+      <button
+        type="button"
+        onClick={() => checkinCopy(c.id)}
+        style={{ ...btn(), opacity: actingId === c.id ? 0.6 : 1 }}
+        disabled={actingId === c.id}
+      >
+        {actingId === c.id ? "Checking in…" : "Check in"}
+      </button>
+
+      {allowInventory ? (
+        <button
+          type="button"
+          onClick={() => removeCopy(c.id, c.copy_code)}
+          disabled={removingId === c.id}
+          style={{ ...btn(), opacity: removingId === c.id ? 0.6 : 1 }}
+        >
+          {removingId === c.id ? "…" : "Remove"}
+        </button>
+      ) : null}
+    </div>
+  ) : (
+    <button type="button" disabled style={{ ...btn(), opacity: 0.6, cursor: "not-allowed" }}>
+      Unavailable
+    </button>
+  )}
+</div>
+
             </div>
           );
         })}
